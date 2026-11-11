@@ -47,6 +47,14 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.page_color.is_some() || s.page_picture.is_some() {
         w.empty("w:displayBackgroundShape", &[]);
     }
+    // §17.15.1.41 / .40 / .74, in CT_Settings order.
+    for (on, name) in
+        [(s.embed_fonts, "w:embedTrueTypeFonts"), (s.embed_system_fonts, "w:embedSystemFonts"), (s.save_subset_fonts, "w:saveSubsetFonts")]
+    {
+        if on {
+            w.empty(name, &[]);
+        }
+    }
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
     }

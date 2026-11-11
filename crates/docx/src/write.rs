@@ -64,6 +64,20 @@ impl PartRels {
         }
         self.list.push((id.to_string(), kind.to_string(), target.to_string(), external));
     }
+    /// Add a relationship under an id no relationship of the part has yet: may be mixed with
+    /// [`PartRels::add_with_id`] (the ids a kept part's markup uses). Returns its id.
+    pub fn add_fresh(&mut self, kind: &str, target: &str, external: bool) -> String {
+        let mut n = self.list.len().saturating_add(1);
+        let id = loop {
+            let id = format!("rId{n}");
+            if !self.list.iter().any(|(i, ..)| *i == id) {
+                break id;
+            }
+            n = n.saturating_add(1);
+        };
+        self.list.push((id.clone(), kind.to_string(), target.to_string(), external));
+        id
+    }
     pub(crate) fn is_empty(&self) -> bool {
         self.list.is_empty()
     }
@@ -147,7 +161,18 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
 
 /// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
 pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
-    zip_entries(&write_parts(doc, flavor)?)
+    zip_entries(&write_parts(doc, flavor, None)?)
+}
+
+/// [`write_as`], embedding fonts when the document's settings ask for it
+/// (`Settings::embed_fonts`, File › Options › Save): `fonts` is asked, for each font name the
+/// written document uses (text, styles, lists, drawings, the theme fonts they refer to), for the
+/// files to embed for it: one per style it has, or none to leave it out (a font that isn't
+/// installed, a licence that doesn't allow embedding, a common system font…). Fonts the font
+/// table kept from the file embeds stay as they are. Within limits: as many font file
+/// references as [`crate::embedded_fonts`] reads back, at most 128 MiB of font files.
+pub fn write_with_fonts(doc: &Document, flavor: Flavor, fonts: &dyn Fn(&str) -> Vec<crate::FontFile>) -> Result<Vec<u8>, DocxError> {
+    zip_entries(&write_parts(doc, flavor, Some(fonts))?)
 }
 
 impl Writer<'_> {

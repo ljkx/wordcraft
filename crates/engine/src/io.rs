@@ -2,6 +2,7 @@
 
 use wordcraft_doc::Document;
 
+pub(crate) mod embed_fonts;
 #[cfg(not(target_arch = "wasm32"))]
 mod safe_save;
 

@@ -8,9 +8,14 @@ use super::{
     glossary, rt, settings_merge, watermark, xml,
 };
 
+/// Asked, for a font name the document uses, for the font files to embed (see
+/// [`crate::write_with_fonts`]).
+pub(crate) type FontProvider<'a> = &'a dyn Fn(&str) -> Vec<crate::FontFile>;
+
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
-/// without the leading `/`, bytes).
-pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
+/// without the leading `/`, bytes). With the document's "embed fonts" setting on, `fonts` gives
+/// the font files to embed.
+pub(crate) fn write_parts(doc: &Document, flavor: Flavor, fonts: Option<FontProvider<'_>>) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
     // A range field must be whole in the file: drop markers that lost their partner in editing.
     let balanced;
     let doc = if doc.has_unbalanced_field_ranges() {
@@ -160,7 +165,20 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         PartRels::default(),
     );
 
-    wr.embeds.font_table(&mut rels);
+    // The fonts to embed: those the parts written so far ask for (the stories, styles, lists,
+    // theme, and the parts kept for charts and diagrams), less those the kept table embeds.
+    let to_embed = match fonts {
+        Some(provider) if doc.settings.embed_fonts => {
+            let xml_parts = entries.iter().filter(|(n, _)| n.ends_with(".xml")).map(|(_, b)| b.as_slice());
+            let kept_parts = wr.embeds.parts.iter().filter(|p| p.0.to_ascii_lowercase().ends_with(".xml")).map(|p| p.1.as_slice());
+            let theme = entries.iter().find(|(n, _)| n == "word/theme/theme1.xml").map(|(_, b)| b.as_slice());
+            let names = crate::fonts::used_font_names(std::iter::once(body.as_slice()).chain(xml_parts).chain(kept_parts), theme);
+            let (kept, kept_refs) = crate::fonts::kept_embeds(doc);
+            crate::fonts::fonts_to_embed(&names, &kept, crate::fonts::MAX_FONTS.saturating_sub(kept_refs), provider)
+        }
+        _ => Vec::new(),
+    };
+    wr.embeds.font_table(&mut rels, &to_embed);
 
     // Media referenced by some drawing (orphan parts would make the package suspect).
     let mut media_types: BTreeMap<String, &str> = BTreeMap::new();

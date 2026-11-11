@@ -13,11 +13,13 @@ use wordcraft_doc::graphic::Embedded;
 use wordcraft_doc::para::Float;
 
 use super::PartRels;
+use crate::fonts::{EmbedStyle, FontFile};
 use crate::package::{
-    CUSTOM_XML_ROOTS, EMBEDDED_PARTS, EmbeddedManifest, MAX_EMBEDDED_PARTS, MAX_EMBEDDED_RELS, VBA_PROJECT_PART, VBA_RELATED, rel_is, relative, rt,
+    CUSTOM_XML_ROOTS, EMBEDDED_PARTS, EmbeddedManifest, FONT_TABLE_PART, MAX_EMBEDDED_PARTS, MAX_EMBEDDED_RELS, VBA_PROJECT_PART, VBA_RELATED,
+    rel_is, relative, rt,
 };
 use crate::units::{MAX_LEN_PT, emu, int};
-use crate::xml::{self, El, MAX_DEPTH};
+use crate::xml::{self, El, MAX_DEPTH, Node};
 
 /// Most bytes written for copies of parts (objects pasted more than once).
 const MAX_COPY_BYTES: u64 = 256 * 1024 * 1024;
@@ -28,6 +30,27 @@ const PART_COST: u64 = 4096;
 
 /// Where the stories' parts live: every story this writer makes is a part in `word/`.
 const STORY_PART: &str = "word/document.xml";
+
+/// The namespaces a font table with fonts added is written with.
+const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+/// Content types of the font table and of an embedded (obfuscated) font (ECMA-376 Part 1, 17.8.1).
+const CT_FONT_TABLE: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
+const CT_FONT: &str = "application/vnd.openxmlformats-officedocument.obfuscatedFont";
+/// How deep a kept font table entry is written back when fonts are added to the table.
+const MAX_FONT_ENTRY_DEPTH: usize = 8;
+
+/// A kept font table entry as written back when fonts are added to the table: its
+/// WordprocessingML content only, since the table is then written with the `w` and `r`
+/// namespaces alone.
+fn font_entry(e: &El, depth: usize) -> El {
+    let kids = if depth >= MAX_FONT_ENTRY_DEPTH {
+        Vec::new()
+    } else {
+        e.els().filter(|c| c.name.starts_with("w:")).map(|c| Node::El(font_entry(c, depth + 1))).collect()
+    };
+    El { name: e.name.clone(), attrs: e.attrs.iter().filter(|(k, _)| k.starts_with("w:") || k.starts_with("r:")).cloned().collect(), kids }
+}
 
 /// The embedded-object parts of a package being written.
 pub(crate) struct EmbedWriter<'d> {
@@ -101,13 +124,82 @@ impl<'d> EmbedWriter<'d> {
         }
     }
 
-    /// Write the font table kept from a file, with the fonts it embeds, relating it from `rels`.
-    pub fn font_table(&mut self, rels: &mut PartRels) {
+    /// Write the font table, relating it from `rels`: the one kept from a file, with the fonts it
+    /// embeds, and `fonts` embedded too (obfuscated under fresh keys, ECMA-376 Part 1, 17.8.1),
+    /// in the entry of the same name or in one of their own. A document with no table to keep
+    /// gets a new one when there are fonts to embed.
+    pub fn font_table(&mut self, rels: &mut PartRels, fonts: &[(String, Vec<FontFile>)]) {
         let mut written = Vec::new();
-        let Some(root) = crate::package::font_table_key(self.passthrough).map(str::to_string) else { return };
-        if let Some(name) = self.copy_tree(&root, &mut HashMap::new(), &mut written) {
-            rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
+        let kept = crate::package::font_table_key(self.passthrough).map(str::to_string);
+        let kept = kept.and_then(|root| self.copy_tree(&root, &mut HashMap::new(), &mut written));
+        if fonts.iter().all(|(_, files)| files.is_empty()) {
+            if let Some(name) = kept {
+                rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
+            }
+            return;
         }
+        // The table's entries and relationships to add to, and where the table's part is queued.
+        let (name, mut entries, mut table_rels, at) = match kept {
+            Some(name) => {
+                // `copy_tree` queues the root first.
+                let at = written.first().copied();
+                let parsed = at.and_then(|i| self.parts.get(i)).and_then(|(_, bytes, _, _)| xml::parse(bytes).ok()).filter(|t| t.name == "w:fonts");
+                let (Some(i), Some(table)) = (at, parsed) else {
+                    log::warn!("docx: the font table can't be read back; no fonts are embedded in it");
+                    rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
+                    return;
+                };
+                let kept_rels = self.parts.get_mut(i).map(|p| std::mem::take(&mut p.3)).unwrap_or_default();
+                let entries: Vec<El> = table.els().filter(|e| e.name == "w:font").map(|e| font_entry(e, 0)).collect();
+                (name, entries, kept_rels, Some(i))
+            }
+            None => (self.alloc(FONT_TABLE_PART), Vec::new(), PartRels::default(), None),
+        };
+        // Each distinct file is written once: (file, relationship id, key GUID).
+        let mut files_written: Vec<(&[u8], String, String)> = Vec::new();
+        for (font, files) in fonts {
+            let mut embeds = Vec::new();
+            for f in files {
+                let (rid, guid) = match files_written.iter().find(|(d, ..)| *d == f.data.as_slice()) {
+                    Some((_, rid, guid)) => (rid.clone(), guid.clone()),
+                    None => {
+                        let part = self.fresh("word/fonts/font", ".odttf");
+                        let (guid, key) = crate::fonts::new_font_key(&f.data, files_written.len() as u64);
+                        let rid = table_rels.add_fresh(rt::FONT, &relative(&name, &part), false);
+                        self.parts.push((part, crate::fonts::obfuscated(&f.data, &key), CT_FONT.into(), PartRels::default()));
+                        files_written.push((&f.data, rid.clone(), guid.clone()));
+                        (rid, guid)
+                    }
+                };
+                embeds.push(El { name: f.style.element().into(), attrs: vec![("r:id".into(), rid), ("w:fontKey".into(), guid)], kids: Vec::new() });
+            }
+            // The embedded files go last in `w:font` (CT_Font), in the table's style order.
+            embeds.sort_by_key(|e| EmbedStyle::ALL.iter().position(|s| s.element() == e.name));
+            let existing = entries.iter_mut().find(|e| e.attr("w:name").is_some_and(|n| n.trim().eq_ignore_ascii_case(font.trim())));
+            match existing {
+                Some(entry) => entry.kids.extend(embeds.into_iter().map(Node::El)),
+                None => entries.push(El {
+                    name: "w:font".into(),
+                    attrs: vec![("w:name".into(), font.clone())],
+                    kids: embeds.into_iter().map(Node::El).collect(),
+                }),
+            }
+        }
+        let mut w = xml::W::new();
+        w.open("w:fonts", &[("xmlns:w", W_NS), ("xmlns:r", R_NS)]);
+        for e in &entries {
+            w.raw(&e.to_xml());
+        }
+        w.close("w:fonts");
+        let bytes = w.into_bytes();
+        match at.and_then(|i| self.parts.get_mut(i)) {
+            Some(p) => {
+                p.1 = bytes;
+                p.3 = table_rels;
+            }
+            None => self.parts.push((name.clone(), bytes, CT_FONT_TABLE.into(), table_rels)),
+        }
+        rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
     }
 
     /// Reserve the names of the media files this writer writes.

@@ -509,3 +509,122 @@ fn libreoffice_font_fallback_lists_are_not_reported_as_missing_when_installed() 
         "drawn: {drawn}"
     );
 }
+
+/// `data` (a TrueType file) with its OS/2 table's `fsType` set to `fs_type`.
+fn with_fs_type(mut data: Vec<u8>, fs_type: u16) -> Vec<u8> {
+    let tables = usize::from(u16::from_be_bytes([data[4], data[5]]));
+    for i in 0..tables {
+        let rec = 12 + i * 16;
+        if &data[rec..rec + 4] == b"OS/2" {
+            let at = u32::from_be_bytes(data[rec + 8..rec + 12].try_into().unwrap()) as usize;
+            data[at + 8..at + 10].copy_from_slice(&fs_type.to_be_bytes());
+            return data;
+        }
+    }
+    panic!("no OS/2 table");
+}
+
+/// File › Options › Save › Embed fonts in the file (#6329): a font installed here goes into the
+/// saved .docx, byte for byte, and the text set in it lays out with it where it isn't installed.
+#[test]
+fn a_font_embedded_on_save_lays_out_its_text_where_it_is_not_installed() {
+    const FAMILY: &str = "JetBrains Embd";
+    const TEXT: &str = "illicit little lilies fill tiny jill";
+    let font = renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", FAMILY);
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let mono = text_end_x(&mut s, "JetBrains Mono", TEXT);
+    s.run("font.add", &json!({"data": base64_encode(&font), "name": "JetBrainsEmbd-Regular.ttf"})).unwrap();
+    assert!((text_end_x(&mut s, FAMILY, TEXT) - mono).abs() < 0.01, "installed: laid out with it");
+    assert_eq!(s.run("file.embedFonts", &json!({"embed": true})).unwrap()["embed"], true);
+    let saved = crate::io::save_bytes("embedded.docx", &s.doc).unwrap();
+    // Without the setting the same document carries no fonts.
+    let mut plain = s.doc.clone();
+    plain.settings.embed_fonts = false;
+    assert!(
+        wordcraft_docx::embedded_fonts(&crate::io::open_bytes("plain.docx", &crate::io::save_bytes("plain.docx", &plain).unwrap()).unwrap())
+            .is_empty()
+    );
+
+    // Uninstalled: text asking for it falls back to another font.
+    s.run("font.remove", &json!({"family": FAMILY})).unwrap();
+    let missing = text_end_x(&mut s, FAMILY, TEXT);
+    assert!((missing - mono).abs() > 1.0, "falls back once removed: {missing} vs {mono}");
+
+    // The saved file brings its own copy: the very file, under the name its text asks for.
+    let reopened = crate::io::open_bytes("embedded.docx", &saved).unwrap();
+    assert!(reopened.settings.embed_fonts);
+    // (Other fonts the document's styles name go in too where they are installed.)
+    let fonts: Vec<_> = wordcraft_docx::embedded_fonts(&reopened).into_iter().filter(|f| f.name == FAMILY).collect();
+    assert_eq!(fonts.len(), 1, "one face (no bold or italic installed)");
+    assert!(fonts[0].data == font, "the font file, byte for byte");
+    let x = Session::new(reopened).layout().caret_on(&Pos::body(0, TEXT.len()), 0).unwrap().x;
+    assert!((x - mono).abs() < 0.01, "laid out with the embedded font: {x} vs {mono} (missing {missing})");
+}
+
+/// A font whose licence restricts embedding (OpenType `fsType` Restricted License) stays out of
+/// the file; one that also allows editable embedding (the least restrictive bit wins) goes in.
+#[test]
+fn a_font_whose_licence_restricts_embedding_is_not_embedded() {
+    const TEXT: &str = "Licensed text";
+    for (family, fs_type, embedded) in [("JetBrains Rstr", 0x0002, false), ("JetBrains Bmap", 0x0208, false), ("JetBrains Edit", 0x000A, true)] {
+        let font = with_fs_type(renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", family), fs_type);
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("font.add", &json!({"data": base64_encode(&font), "name": format!("{family}.ttf")})).unwrap();
+        text_end_x(&mut s, family, TEXT);
+        s.run("file.embedFonts", &json!({"embed": true})).unwrap();
+        let saved = crate::io::save_bytes("licensed.docx", &s.doc).unwrap();
+        s.run("font.remove", &json!({"family": family})).unwrap();
+        let fonts = wordcraft_docx::embedded_fonts(&crate::io::open_bytes("licensed.docx", &saved).unwrap());
+        assert_eq!(fonts.iter().any(|f| f.name == family), embedded, "{family} (fsType {fs_type:#06x})");
+    }
+}
+
+/// "Do not embed common system fonts" (the default) leaves them out; a font that isn't installed
+/// (only a substitute is) is never embedded under its name.
+#[test]
+fn common_system_fonts_and_substitutes_are_not_embedded() {
+    use crate::io::embed_fonts::{files_for, is_common_system_font};
+    for f in ["Arial", "times new roman", " Calibri ", "Segoe UI", "Helvetica"] {
+        assert!(is_common_system_font(f), "{f}");
+        assert!(files_for(f, true).is_empty(), "{f}");
+    }
+    assert!(!is_common_system_font("JetBrains Mono"));
+    // Bundled: embedded with or without the system-font rule.
+    assert!(!files_for("JetBrains Mono", true).is_empty());
+    assert!(!files_for("Source Serif 4", false).is_empty());
+    // Drawn in a substitute, so nothing of its own to embed.
+    assert!(files_for("Quillwright Never Installed", false).is_empty());
+    // Source Serif 4 has its four styles; only the faces the database has are embedded, each
+    // once (its Bold Italic is its own file, its Regular another).
+    let styles: Vec<wordcraft_docx::EmbedStyle> = files_for("Source Serif 4", false).iter().map(|f| f.style).collect();
+    assert_eq!(styles, wordcraft_docx::EmbedStyle::ALL);
+}
+
+/// `file.embedFonts` is an undoable document change, refused under protection;
+/// `file.fontEmbedding` reads the settings without changing anything.
+#[test]
+fn embed_fonts_settings_are_an_undoable_document_change() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Draft"})).unwrap();
+    s.dirty = false;
+    let undo = s.undo_depth();
+    let off = json!({"embed": false, "subset": false, "skipSystemFonts": true});
+    assert_eq!(s.run("file.fontEmbedding", &json!({})).unwrap(), off);
+    assert_eq!(s.undo_depth(), undo, "reading is no change");
+    assert!(!s.dirty);
+    assert!(s.run("file.embedFonts", &json!({})).is_err(), "nothing to set");
+    assert!(s.run("file.embedFonts", &json!({"embed": "yes"})).is_err());
+    let on = s.run("file.embedFonts", &json!({"embed": true, "subset": true, "skipSystemFonts": false})).unwrap();
+    assert_eq!(on, json!({"embed": true, "subset": true, "skipSystemFonts": false}));
+    let st = &s.doc.settings;
+    assert!(st.embed_fonts && st.save_subset_fonts && st.embed_system_fonts);
+    assert!(s.dirty);
+    // Saved with the document.
+    let back = crate::io::open_bytes("x.docx", &crate::io::save_bytes("x.docx", &s.doc).unwrap()).unwrap();
+    assert!(back.settings.embed_fonts && back.settings.save_subset_fonts && back.settings.embed_system_fonts);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.run("file.fontEmbedding", &json!({})).unwrap(), off);
+    s.doc.settings.protection = Some("readOnly".into());
+    assert!(s.run("file.embedFonts", &json!({"embed": true})).is_err(), "refused on a protected document");
+    assert_eq!(s.run("file.fontEmbedding", &json!({})).unwrap()["embed"], false);
+}

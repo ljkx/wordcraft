@@ -53,9 +53,12 @@ fn draw_charts(doc: &mut Document) {
 
 /// Save to a format other than plain text / JSON.
 pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Option<Result<Vec<u8>, String>> {
-    // .docx/.docm/.dotx/.dotm: the extension picks the package flavour Word expects.
+    // .docx/.docm/.dotx/.dotm: the extension picks the package flavour Word expects. With
+    // File › Options › Save's "Embed fonts in the file" on, the fonts the document uses go in it.
     if let Some(flavor) = wordcraft_docx::Flavor::from_ext(ext) {
-        return Some(wordcraft_docx::write_as(doc, flavor).map_err(|e| e.to_string()));
+        let skip_system = !doc.settings.embed_system_fonts;
+        let fonts = |font: &str| crate::io::embed_fonts::files_for(font, skip_system);
+        return Some(wordcraft_docx::write_with_fonts(doc, flavor, &fonts).map_err(|e| e.to_string()));
     }
     match ext {
         "xml" if opts.word2003 => Some(wordcraft_docx::write_wordml2003(doc).map_err(|e| e.to_string())),

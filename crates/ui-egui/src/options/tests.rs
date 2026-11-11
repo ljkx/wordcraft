@@ -316,6 +316,45 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
     assert!(!h.state().session.doc.settings.remove_personal_info, "and off again");
 }
 
+/// File › Options › Save › Embed fonts in the file (#6329): the checkboxes are the document's
+/// `file.embedFonts` settings; the two that refine it wait for it to be on, as in Word.
+#[test]
+fn save_embed_font_checkboxes_set_the_font_embedding() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "save"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    const EMBED: &str = "Embed fonts in the file";
+    const SUBSET: &str = "Embed only the characters used in the document";
+    const SYSTEM: &str = "Do not embed common system fonts";
+    assert!(h.query_by_label("Fonts in this document").is_some(), "the section is there");
+    assert!(
+        h.get_by_label(SUBSET).accesskit_node().is_disabled() && h.get_by_label(SYSTEM).accesskit_node().is_disabled(),
+        "off until embedding is on"
+    );
+    h.get_by_label(EMBED).click();
+    h.run_steps(4);
+    assert!(h.state().session.doc.settings.embed_fonts);
+    assert!(!h.get_by_label(SYSTEM).accesskit_node().is_disabled());
+    h.get_by_label(SYSTEM).click();
+    h.run_steps(4);
+    h.get_by_label(SUBSET).click();
+    h.run_steps(4);
+    let state = h.state_mut().session.run("file.fontEmbedding", &json!({})).unwrap();
+    assert_eq!(state, json!({"embed": true, "subset": true, "skipSystemFonts": false}));
+    // An undoable change like any other.
+    h.state_mut().session.run("edit.undo", &json!({})).unwrap();
+    h.run_steps(4);
+    assert!(!h.state().session.doc.settings.save_subset_fonts);
+}
+
 /// File › Options › Accessibility › Animation effects: Use system setting (the default), On
 /// or Off, with a line saying what the system's own setting is while it is followed.
 #[test]

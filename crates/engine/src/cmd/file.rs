@@ -178,6 +178,33 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.privacy", "Privacy Settings", "File › Options › Save", |s, _| Ok(privacy(s)))
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
             .pure(),
+        // File › Options › Save › Embed fonts in the file: the document's `w:embedTrueTypeFonts`,
+        // `w:embedSystemFonts` and `w:saveSubsetFonts` settings, honoured when it is saved as
+        // .docx (#6329). Document settings like the privacy options: undoable, refused on a
+        // protected document; `file.fontEmbedding` reads them.
+        CommandSpec::new("file.embedFonts", "Embed Fonts", "File › Options › Save", |s, v| {
+            let embed = p::bool(v, "embed");
+            let subset = p::bool(v, "subset");
+            let skip_system = p::bool(v, "skipSystemFonts");
+            if embed.is_none() && subset.is_none() && skip_system.is_none() {
+                return Err(CmdError::Params("give embed, subset or skipSystemFonts (file.fontEmbedding reads them)".into()));
+            }
+            let settings = &mut s.doc.settings;
+            if let Some(on) = embed {
+                settings.embed_fonts = on;
+            }
+            if let Some(on) = subset {
+                settings.save_subset_fonts = on;
+            }
+            if let Some(on) = skip_system {
+                settings.embed_system_fonts = !on;
+            }
+            Ok(font_embedding(s))
+        })
+        .params(r#"{"embed"?: bool (save the fonts the document uses in the .docx: the installed Regular, Bold, Italic and Bold Italic faces of each, when their licence allows), "subset"?: bool (Embed only the characters used: saved as the document's setting; WordCraft embeds whole font files), "skipSystemFonts"?: bool (Do not embed common system fonts; on by default)} — at least one"#),
+        CommandSpec::new("file.fontEmbedding", "Font Embedding Settings", "File › Options › Save", |s, _| Ok(font_embedding(s)))
+            .params(r#"{} → {"embed": bool, "subset": bool, "skipSystemFonts": bool} (file.embedFonts changes them)"#)
+            .pure(),
         CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
@@ -213,6 +240,13 @@ pub fn specs() -> Vec<CommandSpec> {
 /// The document's privacy settings, as `file.privacy` and `file.privacyOptions` return them.
 fn privacy(s: &Session) -> Value {
     json!({"removePersonalInfo": s.doc.settings.remove_personal_info, "removeDateTime": s.doc.settings.remove_date_time})
+}
+
+/// The document's font embedding settings, as `file.fontEmbedding` and `file.embedFonts` return
+/// them.
+fn font_embedding(s: &Session) -> Value {
+    let settings = &s.doc.settings;
+    json!({"embed": settings.embed_fonts, "subset": settings.save_subset_fonts, "skipSystemFonts": !settings.embed_system_fonts})
 }
 
 /// Open a new document beside the open ones and make it active: a blank one in the saved

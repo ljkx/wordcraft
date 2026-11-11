@@ -7271,6 +7271,8 @@ fn saving_and_exporting_keep_the_view_where_it_is() {
     keeps_view(&mut a, "file.info", json!({}));
     keeps_view(&mut a, "file.rename", json!({"name": "renamed"}));
     keeps_view(&mut a, "file.privacyOptions", json!({"removeDateTime": true}));
+    keeps_view(&mut a, "file.embedFonts", json!({"embed": true}));
+    keeps_view(&mut a, "file.fontEmbedding", json!({}));
     keeps_view(&mut a, "file.privacy", json!({}));
     keeps_view(&mut a, "file.setAuthor", json!({"name": "Ada"}));
     keeps_view(&mut a, "file.compatibility", json!({}));

@@ -29,6 +29,45 @@ pub(super) static BUNDLED: &[&[u8]] = &[
     include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf"),
 ];
 
+/// What a font's licence lets a document that uses it do with it: its OpenType `OS/2.fsType`
+/// embedding permissions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Embedding {
+    /// May be embedded, and installed from the document (no restriction).
+    Installable,
+    /// May be embedded; the document may be edited with it.
+    Editable,
+    /// May be embedded; a document using it may be viewed and printed, not edited.
+    PreviewPrint,
+    /// Must not be embedded (Restricted License embedding).
+    Restricted,
+    /// Only the font's bitmaps may be embedded, not its outlines.
+    BitmapOnly,
+}
+
+impl Embedding {
+    /// The permissions an `fsType` value grants. Bits 0–3 are the usage permissions: with more
+    /// than one set, the least restrictive applies (OpenType's OS/2 table). Bit 9 allows only
+    /// bitmaps, whatever they say.
+    pub fn of(fs_type: u16) -> Embedding {
+        if fs_type & 0x0200 != 0 {
+            Embedding::BitmapOnly
+        } else if fs_type & 0x0008 != 0 {
+            Embedding::Editable
+        } else if fs_type & 0x0004 != 0 {
+            Embedding::PreviewPrint
+        } else if fs_type & 0x0002 != 0 {
+            Embedding::Restricted
+        } else {
+            Embedding::Installable
+        }
+    }
+    /// Can a document embed the font's outlines?
+    pub fn allows_embedding(self) -> bool {
+        !matches!(self, Embedding::Restricted | Embedding::BitmapOnly)
+    }
+}
+
 #[derive(Clone)]
 pub(super) enum FontBytes {
     Static(&'static [u8]),
@@ -357,6 +396,12 @@ impl FontFace {
     pub fn has_layout_tables(&self) -> bool {
         use skrifa::raw::TableProvider;
         self.skrifa().is_some_and(|f| f.gsub().is_ok())
+    }
+    /// What the face's licence lets a document do with it, from its OpenType `OS/2.fsType`
+    /// (see [`Embedding::of`]): a face without an OS/2 table states no restriction.
+    pub fn embedding(&self) -> Embedding {
+        use skrifa::raw::TableProvider;
+        self.skrifa().and_then(|f| f.os2().ok()).map_or(Embedding::Installable, |os2| Embedding::of(os2.fs_type()))
     }
     /// Units per em.
     pub fn units_per_em(&self) -> f64 {

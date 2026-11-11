@@ -24,6 +24,10 @@ impl Reader<'_> {
                 "w:linkStyles" => s.link_styles = on_off(k),
                 "w:removePersonalInformation" => s.remove_personal_info = on_off(k),
                 "w:removeDateAndTime" => s.remove_date_time = on_off(k),
+                // §17.15.1.41 / .40 / .74: File › Options › Save's font embedding.
+                "w:embedTrueTypeFonts" => s.embed_fonts = on_off(k),
+                "w:embedSystemFonts" => s.embed_system_fonts = on_off(k),
+                "w:saveSubsetFonts" => s.save_subset_fonts = on_off(k),
                 "w:compat" => {
                     s.allow_space_of_same_style_in_table = k.child("w:allowSpaceOfSameStyleInTable").is_some_and(on_off);
                     // Only Word's own setting: another `w:uri` names a different application's.

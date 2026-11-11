@@ -524,6 +524,29 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
         }
     }
     note(ui, "The document you are editing keeps the names and dates; only the saved file leaves them out.");
+    ui.add_space(8.0);
+    // The open document's `file.embedFonts` (#6329): saved with it, honoured when it is saved as .docx.
+    section(ui, "Fonts in this document");
+    let settings = &app.session.doc.settings;
+    let embed = settings.embed_fonts;
+    let rows = [
+        ("Embed fonts in the file", "embed", embed, true),
+        ("Embed only the characters used in the document", "subset", settings.save_subset_fonts, embed),
+        ("Do not embed common system fonts", "skipSystemFonts", !settings.embed_system_fonts, embed),
+    ];
+    for (label, key, value, enabled) in rows {
+        let mut v = value;
+        let r = ui.add_enabled_ui(enabled, |ui| ui.checkbox(&mut v, tl!(label))).inner;
+        if r.changed()
+            && let Err(e) = app.run("file.embedFonts", json!({ key: v }))
+        {
+            app.status(e);
+        }
+    }
+    note(
+        ui,
+        "Saved in the .docx, the fonts the document uses look the same on a computer that doesn't have them. Fonts whose licence doesn't allow it are left out.",
+    );
 }
 
 fn language(app: &mut WordApp, ui: &mut Ui) {

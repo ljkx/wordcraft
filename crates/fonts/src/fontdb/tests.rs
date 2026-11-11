@@ -18,6 +18,32 @@ fn occasional_slow_hinted_glyphs_do_not_turn_hinting_off() {
     let spread: Vec<bool> = (0..64).map(|i| i % 8 == 7).collect();
     assert_eq!(off(&spread), Some(23));
 }
+/// OpenType `fsType` (OS/2): the usage bits, least restrictive first when several are set, and
+/// bitmap-only whatever they say (#6329).
+#[test]
+fn embedding_permissions_follow_fs_type() {
+    use super::face::Embedding;
+    for (fs_type, want) in [
+        (0x0000, Embedding::Installable),
+        (0x0002, Embedding::Restricted),
+        (0x0004, Embedding::PreviewPrint),
+        (0x0008, Embedding::Editable),
+        (0x0006, Embedding::PreviewPrint),
+        (0x000A, Embedding::Editable),
+        (0x0100, Embedding::Installable),
+        (0x0208, Embedding::BitmapOnly),
+        (0xFFFF, Embedding::BitmapOnly),
+    ] {
+        assert_eq!(Embedding::of(fs_type), want, "{fs_type:#06x}");
+    }
+    assert!(!Embedding::Restricted.allows_embedding() && !Embedding::BitmapOnly.allows_embedding());
+    assert!(Embedding::PreviewPrint.allows_embedding() && Embedding::Editable.allows_embedding());
+    // The bundled fonts may be embedded.
+    for data in super::BUNDLED {
+        let face = super::make_face(super::FontBytes::Static(data), 0, "T".into(), "Regular".into(), "T".into(), Vec::new()).unwrap();
+        assert!(face.embedding().allows_embedding());
+    }
+}
 #[test]
 #[ignore = "requires a locally licensed kaiu.ttf; set WORDCRAFT_TEST_KAI_FONT"]
 fn kai_contours_include_complete_character_body() {

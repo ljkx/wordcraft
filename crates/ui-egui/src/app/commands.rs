@@ -383,6 +383,8 @@ impl WordApp {
                 | "file.rename"
                 | "file.privacy"
                 | "file.privacyOptions"
+                | "file.embedFonts"
+                | "file.fontEmbedding"
                 | "file.setAuthor"
                 | "file.compatibility"
                 | "file.encrypt"

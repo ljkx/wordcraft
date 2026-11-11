@@ -166,6 +166,18 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// Embed the fonts the document uses when it is saved (File › Options › Save, "Embed fonts in
+    /// the file"; `w:embedTrueTypeFonts`, ECMA-376 §17.15.1.41).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub embed_fonts: bool,
+    /// Embed common system fonts too (`w:embedSystemFonts`, §17.15.1.40): Word's "Do not embed
+    /// common system fonts" turned off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub embed_system_fonts: bool,
+    /// Embed only the characters the document uses (`w:saveSubsetFonts`, §17.15.1.74). Kept and
+    /// saved as a setting; WordCraft itself embeds whole font files.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub save_subset_fonts: bool,
     /// The document was opened from ODF: the standard's rules that differ from Word's apply as
     /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,6 +340,9 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            embed_fonts: false,
+            embed_system_fonts: false,
+            save_subset_fonts: false,
             odf: None,
         }
     }
