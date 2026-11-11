@@ -379,6 +379,7 @@ Table Layout|Table|Alt Text|table.altText
 Table Layout|Table|Table Direction|table.rtl
 Table Layout|Draw|Draw Table|table.draw
 Table Layout|Draw|Eraser|table.eraser
+Table Layout|Rows & Columns|Insert Cells|table.insertCells
 Table Layout|Rows & Columns|Delete Cells|table.deleteCells
 Table Layout|Rows & Columns|Delete Rows|table.deleteRow
 Table Layout|Rows & Columns|Delete Columns|table.deleteColumn

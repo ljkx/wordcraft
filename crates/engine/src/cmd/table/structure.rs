@@ -19,14 +19,22 @@ pub(in crate::cmd) fn row(s: &mut Session, below: bool) -> CmdResult {
 /// Insert Left / Right: a column beside the caret's cell; the caret goes into it.
 pub(in crate::cmd) fn col(s: &mut Session, right: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
+    cols(s, &tp, r, c, right, 1)
+}
+
+/// `n` columns beside cell `c` of row `r` of the table at `tp`; the caret goes into the first.
+pub(in crate::cmd) fn cols(s: &mut Session, tp: &Path, r: usize, c: usize, right: bool, n: usize) -> CmdResult {
+    let tp = tp.clone();
     let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
     let g = t.grid_col(r, c);
     let span = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.span()).unwrap_or(1);
-    t.insert_col(if right { g + span } else { g });
+    let before: f32 = t.grid.iter().sum();
+    for _ in 0..n {
+        t.insert_col(if right { g + span } else { g });
+    }
     // Keep the table within its width: shrink all columns proportionally.
     let total: f32 = t.grid.iter().sum();
-    let before: f32 = total - t.grid.get(if right { g + span } else { g }).copied().unwrap_or(0.0);
-    if before > 0.0 {
+    if before > 0.0 && total > 0.0 {
         let k = before / total;
         t.grid.iter_mut().for_each(|w| *w *= k);
     }
