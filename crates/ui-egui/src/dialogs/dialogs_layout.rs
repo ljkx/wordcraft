@@ -1,14 +1,15 @@
 //! Layout, Review and Mailings dialogs (#407): Line Numbers (Layout › Line Numbers › Line
 //! Numbering Options…), Hyphenation (Hyphenation Options… and Manual…), Language (Review ›
 //! Language), Envelopes and Labels (Mailings › Create), Formula (Table Layout › Data, #1201)
-//! Sort (Table Layout › Data, #1200), Split Cells (Table Layout › Merge), Convert Text to Table
+//! Sort (Table Layout › Data, #1200), Split Cells (Table Layout › Merge), Insert Cells and Delete
+//! Cells (Table Layout › Rows & Columns and the table's context menu, #6330), Convert Text to Table
 //! (Insert › Table, #2592), Size (Picture Format › Size, #2573) and Format Page Numbers (Insert ›
 //! Header & Footer › Page Number ▸ Format Page Numbers…, #1113). Each ends by running a
 //! command (`layout.lineNumbers`, `layout.hyphenation`, `layout.manualHyphenation` with
 //! `caret.set` and `text.optionalHyphen`, `review.language`, `mailings.envelopes`,
-//! `mailings.labels`, `table.formula`, `table.sort`, `table.split`, `table.fromText`,
-//! `picture.size`, `layout.pageNumberFormat`), so scripts and agents get the same result without
-//! the dialog. Shown through [`crate::dialogs::Dialog::Layout`].
+//! `mailings.labels`, `table.formula`, `table.sort`, `table.split`, `table.insertCells`,
+//! `table.deleteCells`, `table.fromText`, `picture.size`, `layout.pageNumberFormat`), so scripts
+//! and agents get the same result without the dialog. Shown through [`crate::dialogs::Dialog::Layout`].
 
 use egui::{Ui, vec2};
 use serde::Serialize;
@@ -35,8 +36,8 @@ pub(crate) use print::envelope_label;
 use print::product_label;
 pub use print::{EnvelopeForm, LabelsForm};
 use print::{envelopes_ui, labels_ui};
-pub use table::{FORMULA_FUNCTIONS, FormulaForm, SortForm, SplitCellsForm, TableToTextForm, TextToTableForm};
-use table::{formula_ui, sort_ui, split_cells_ui, table_to_text_ui, text_to_table_ui};
+pub use table::{CellsForm, FORMULA_FUNCTIONS, FormulaForm, SortForm, SplitCellsForm, TableToTextForm, TextToTableForm};
+use table::{cells_ui, formula_ui, sort_ui, split_cells_ui, table_to_text_ui, text_to_table_ui};
 #[cfg(test)]
 use text::language_name;
 pub use text::{HyphenationForm, LANGUAGES, LanguageForm, LineNumbersForm, ManualForm};
@@ -54,6 +55,8 @@ pub enum LayoutDialog {
     Formula(FormulaForm),
     Sort(SortForm),
     SplitCells(SplitCellsForm),
+    InsertCells(CellsForm),
+    DeleteCells(CellsForm),
     TextToTable(TextToTableForm),
     TableToText(TableToTextForm),
     Size(SizeForm),
@@ -72,6 +75,8 @@ impl LayoutDialog {
             LayoutDialog::Formula(_) => "tableFormula",
             LayoutDialog::Sort(_) => "tableSort",
             LayoutDialog::SplitCells(_) => "splitCells",
+            LayoutDialog::InsertCells(_) => "insertCells",
+            LayoutDialog::DeleteCells(_) => "deleteCells",
             LayoutDialog::TextToTable(_) => "textToTable",
             LayoutDialog::TableToText(_) => "tableToText",
             LayoutDialog::Size(_) => "pictureSize",
@@ -91,6 +96,8 @@ impl LayoutDialog {
             LayoutDialog::Formula(_) => "Formula",
             LayoutDialog::Sort(_) => "Sort",
             LayoutDialog::SplitCells(_) => "Split Cells",
+            LayoutDialog::InsertCells(_) => "Insert Cells",
+            LayoutDialog::DeleteCells(_) => "Delete Cells",
             LayoutDialog::TextToTable(_) => "Convert Text to Table",
             LayoutDialog::TableToText(_) => "Convert to Text",
             LayoutDialog::Size(_) => "Size",
@@ -111,6 +118,8 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "tableFormula" => LayoutDialog::Formula(FormulaForm::read(app)?),
         "tableSort" => LayoutDialog::Sort(SortForm::read(app)?),
         "splitCells" => LayoutDialog::SplitCells(SplitCellsForm::read(app)?),
+        "insertCells" => LayoutDialog::InsertCells(CellsForm::read(app, false)?),
+        "deleteCells" => LayoutDialog::DeleteCells(CellsForm::read(app, true)?),
         "textToTable" => LayoutDialog::TextToTable(TextToTableForm::read(app)?),
         "tableToText" => LayoutDialog::TableToText(TableToTextForm::read(app)?),
         "pictureSize" => LayoutDialog::Size(SizeForm::read(app)?),
@@ -131,6 +140,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
         LayoutDialog::Formula(f) => formula_ui(app, ui, f),
         LayoutDialog::Sort(f) => sort_ui(app, ui, f),
         LayoutDialog::SplitCells(f) => split_cells_ui(app, ui, f),
+        LayoutDialog::InsertCells(f) | LayoutDialog::DeleteCells(f) => cells_ui(app, ui, f),
         LayoutDialog::TextToTable(f) => text_to_table_ui(app, ui, f),
         LayoutDialog::TableToText(f) => table_to_text_ui(app, ui, f),
         LayoutDialog::Size(f) => size_ui(app, ui, f),

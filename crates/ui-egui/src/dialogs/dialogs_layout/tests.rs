@@ -794,3 +794,31 @@ fn size_dialog_typed_height_then_ok_without_enter_applies_it() {
     assert!(h.state().dialog.is_none(), "Esc cancels the dialog");
     assert_eq!(selected_size(h.state()), (30.0, 15.0), "nothing applied");
 }
+
+/// #6330: Insert Cells and Delete Cells open their dialogs from the ribbon's and menu's command
+/// (scripts with a `shift` never see them), Insert on Shift cells down and Delete on Shift cells
+/// left; OK runs the command with the choice. Outside a table neither opens.
+#[test]
+fn insert_and_delete_cells_open_their_dialogs() {
+    let mut a = table_app(2, &["A", "B", "C", "D"]);
+    assert_eq!(a.run("table.insertCells", json!({})).unwrap(), json!({"pending": "insertCells"}));
+    assert_eq!(table_shape(&a), [2, 2], "nothing inserted yet");
+    let LayoutDialog::InsertCells(mut f) = form(&mut a) else { panic!("insert cells") };
+    assert_eq!((f.shift.as_str(), f.command()), ("down", "table.insertCells"));
+    f.shift = "row".into();
+    a.run(f.command(), f.params()).unwrap();
+    assert_eq!(table_shape(&a), [2, 2, 2]);
+
+    assert_eq!(a.run("table.deleteCells", json!({})).unwrap(), json!({"pending": "deleteCells"}));
+    let LayoutDialog::DeleteCells(mut f) = form(&mut a) else { panic!("delete cells") };
+    assert_eq!((f.shift.as_str(), f.command()), ("left", "table.deleteCells"));
+    f.shift = "column".into();
+    a.run(f.command(), f.params()).unwrap();
+    assert_eq!(table_shape(&a), [1, 1, 1]);
+    assert!(a.dialog.is_none());
+
+    let mut a = app();
+    for name in ["insertCells", "deleteCells"] {
+        assert_eq!(a.run("ui.dialog", json!({"name": name})).unwrap(), json!({"dialog": null}), "{name}");
+    }
+}

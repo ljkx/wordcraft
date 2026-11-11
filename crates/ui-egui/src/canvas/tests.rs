@@ -5294,3 +5294,60 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// Every cell's text of the window's table, row by row.
+fn table_texts(h: &H) -> Vec<Vec<String>> {
+    let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+    t.rows.iter().map(|r| r.cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect()).collect()).collect()
+}
+
+/// Clicks the open dialog's option `label`, then OK.
+fn choose_and_ok(h: &mut H, label: &str) {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role_and_label(Role::RadioButton, label).click();
+    steps(h, 2);
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    steps(h, 3);
+}
+
+/// #6330: right-click › Delete › Delete Cells opens the Delete Cells dialog on Shift cells left;
+/// choosing Shift cells up and OK moves the column's text up, in one undo step.
+#[test]
+fn delete_cells_from_the_context_menu_shifts_cells_up() {
+    let mut h = table_window();
+    h.state_mut().session.sel =
+        wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 0, 0]), off: 0 });
+    h.state_mut().run("text.insert", json!({"text": "Price"})).unwrap();
+    steps(&mut h, 2);
+    let b = cell(&mut h, 0, 0);
+    let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
+    right_click(&mut h, at);
+    pick(&mut h, &["Delete", "Delete Cells"]);
+    let Some(crate::dialogs::Dialog::Layout(d)) = &h.state().dialog else { panic!("no dialog: {:?}", h.state().dialog) };
+    assert!(matches!(&**d, crate::dialogs_layout::LayoutDialog::DeleteCells(f) if f.shift == "left"), "{d:?}");
+    assert_eq!(table_texts(&h)[0][0], "Product", "nothing deleted before OK");
+    let depth = h.state().session.undo_depth();
+    choose_and_ok(&mut h, "Shift cells up");
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert_eq!(table_texts(&h), [["Price", "", ""], ["", "", ""]]);
+    assert_eq!(h.state().session.undo_depth(), depth + 1);
+}
+
+/// #6330: right-click › Insert › Insert Cells… opens the Insert Cells dialog on Shift cells
+/// down; choosing Shift cells right and OK puts a new cell before the caret's.
+#[test]
+fn insert_cells_from_the_context_menu_shifts_cells_right() {
+    let mut h = table_window();
+    let b = cell(&mut h, 0, 0);
+    let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
+    right_click(&mut h, at);
+    pick(&mut h, &["Insert", "Insert Cells"]);
+    let Some(crate::dialogs::Dialog::Layout(d)) = &h.state().dialog else { panic!("no dialog: {:?}", h.state().dialog) };
+    assert!(matches!(&**d, crate::dialogs_layout::LayoutDialog::InsertCells(f) if f.shift == "down"), "{d:?}");
+    choose_and_ok(&mut h, "Shift cells right");
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    let texts = table_texts(&h);
+    assert_eq!(texts[0], ["", "Product", "", ""]);
+    assert_eq!(texts[1].len(), 3, "the other row keeps its cells");
+}

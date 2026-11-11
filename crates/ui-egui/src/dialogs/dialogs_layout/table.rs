@@ -278,6 +278,60 @@ pub(super) fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsF
 }
 
 // ---------------------------------------------------------------------------------------------
+// Insert Cells and Delete Cells
+
+/// The Insert Cells and Delete Cells dialogs' choice (#6330): where the selected cells' neighbours
+/// go (`right` or `down`, `left` or `up`), or whole rows or columns (`row`, `column`). Insert
+/// opens on Shift cells down, Delete on Shift cells left; OK runs `table.insertCells` or
+/// `table.deleteCells` with the choice as `shift`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellsForm {
+    pub delete: bool,
+    pub shift: String,
+}
+
+impl CellsForm {
+    /// None when the caret isn't in a table.
+    pub fn read(app: &WordApp, delete: bool) -> Option<CellsForm> {
+        app.session.sel.focus.path.cell()?;
+        Some(CellsForm { delete, shift: if delete { "left" } else { "down" }.into() })
+    }
+
+    /// The command OK runs.
+    pub fn command(&self) -> &'static str {
+        if self.delete { "table.deleteCells" } else { "table.insertCells" }
+    }
+
+    /// The command's parameters for OK.
+    pub fn params(&self) -> Value {
+        json!({"shift": self.shift})
+    }
+}
+
+pub(super) fn cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CellsForm) -> bool {
+    let mut option = |value: &str, label: &str| {
+        ui.radio_value(&mut f.shift, value.to_string(), label);
+    };
+    if f.delete {
+        option("left", tl!("Shift cells left"));
+        option("up", tl!("Shift cells up"));
+        option("row", tl!("Delete entire row"));
+        option("column", tl!("Delete entire column"));
+    } else {
+        option("right", tl!("Shift cells right"));
+        option("down", tl!("Shift cells down"));
+        option("row", tl!("Insert entire row"));
+        option("column", tl!("Insert entire column"));
+    }
+    let (ok, cancel) = buttons(ui, "OK", true);
+    if ok {
+        return run(app, f.command(), f.params());
+    }
+    cancel
+}
+
+// ---------------------------------------------------------------------------------------------
 // Convert Text to Table
 
 /// The Convert Text to Table dialog's fields: the selected paragraphs (`lines`), where to
