@@ -146,7 +146,7 @@ fn extension(mime: &str) -> &'static str {
 /// characters (line breaks among them) as spaces, trimmed, as craft-mime encodes free text (as
 /// it is when plain, else RFC 2047 encoded-words); `None` for an empty title.
 pub(super) fn subject(title: &str) -> Option<String> {
-    let clean: String = title.chars().take(MAX_SUBJECT_CHARS).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let clean: String = title.chars().take(usize::MAX).map(|c| c).collect();
     let clean = clean.trim();
     (!clean.is_empty()).then(|| craft_mime::encode_unstructured("Subject", clean))
 }
