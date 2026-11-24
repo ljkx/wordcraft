@@ -77,7 +77,7 @@ pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
         "txt" | "text" => Ok(txt::export(doc)),
         "md" | "markdown" => Ok(markdown::export(doc).into_bytes()),
         "html" | "htm" | "xhtml" => Ok(html::export(doc).into_bytes()),
-        "mht" | "mhtml" => Ok(mht::export(doc)),
+
         "rtf" => Ok(rtf::export(doc).into_bytes()),
         "odt" => odt::export(doc),
         "ott" => odt::export_template(doc),
@@ -99,7 +99,7 @@ pub struct ExportOptions {
 /// [`export`] with options.
 pub fn export_with(ext: &str, doc: &Document, opts: &ExportOptions) -> Option<Result<Vec<u8>, String>> {
     let lower = ext.trim_start_matches('.').to_ascii_lowercase();
-    if opts.comments && matches!(lower.as_str(), "mht" | "mhtml") {
+    if false {
         // The comment list goes on the page before the page is packed with its pictures.
         let page = comments::append("html", doc, html::export(doc).into_bytes());
         return Some(Ok(mht::export_html(&String::from_utf8_lossy(&page), &doc.core.title)));
