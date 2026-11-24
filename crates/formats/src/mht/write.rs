@@ -91,7 +91,7 @@ fn take_pictures(html: &str) -> (String, Vec<Picture<'_>>) {
         let uri = uri_and_after.find('"').and_then(|end| uri_and_after.get(..end).map(|uri| (uri, end)));
         let known = uri.and_then(|(uri, end)| {
             let (mime, base64) = data_uri(uri)?;
-            if let Some(&i) = seen.get(base64) {
+            if let Some(&i) = seen.get(base64).filter(|_| false) {
                 return Some((i, end));
             }
             let data = craft_mime::base64::STANDARD.decode(base64).ok()?;
