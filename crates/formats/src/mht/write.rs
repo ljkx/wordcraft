@@ -1,41 +1,35 @@
 //! Saving a Single File Web Page (`.mht`, `.mhtml`): the page [`crate::html`] writes and its
 //! pictures in one MIME message, as RFC 2557 describes (a `multipart/related` message whose
-//! first part is the page, RFC 2387).
+//! first part is the page, RFC 2387), written with craft-mime's writer.
 //!
-//! - The page is the root part, `text/html` in UTF-8, quoted-printable (RFC 2045 §6.7), with
-//!   the `Content-Location` [`PAGE_LOCATION`].
-//! - Each distinct picture is a part of its own, base64 (RFC 2045 §6.8), with the
-//!   `Content-ID` `<imageNNN.ext>` and the `Content-Location`
-//!   `file:///document_files/imageNNN.ext`. The page names it by its ID (`cid:imageNNN.ext`,
-//!   RFC 2392), not by its location: Chrome and Edge show no picture whose part has a `file:`
-//!   location, and Word turns a picture found only by a location at the root of `file:///` into
-//!   a link to a missing file instead of keeping it. Both load `cid:` pictures, and Word keeps
-//!   the file name the ID gives (`image1.png`). A picture shown twice is stored once.
-//! - The document's title is the message's `Subject` in RFC 2047 encoded words.
+//! - The page is the root part, `text/html` in UTF-8 ([`craft_mime::Entity::text`]:
+//!   quoted-printable unless it is ASCII in short lines), with the `Content-Location`
+//!   [`PAGE_LOCATION`].
+//! - Each distinct picture is a part of its own, base64, with the `Content-ID`
+//!   `<imageNNN.ext>` and the `Content-Location` `file:///document_files/imageNNN.ext`. The page
+//!   names it by its ID (`cid:imageNNN.ext`, RFC 2392), not by its location: Chrome and Edge
+//!   show no picture whose part has a `file:` location, and Word turns a picture found only by a
+//!   location at the root of `file:///` into a link to a missing file instead of keeping it. Both
+//!   load `cid:` pictures, and Word keeps the file name the ID gives (`image1.png`). A picture
+//!   shown twice is stored once.
+//! - The document's title is the message's `Subject` ([`craft_mime::encode_unstructured`]).
 //!
-//! The output is the same bytes for the same document: no date, and a fixed boundary that no
-//! part can contain (see [`BOUNDARY`]). The work is linear in the size of the page.
+//! The output is the same bytes for the same document: no date, and craft-mime's boundary is a
+//! hash of the parts, moved on when a part holds it. The work is linear in the size of the page.
 
 use std::collections::HashMap;
 
+use craft_mime::{Boundaries, Entity, transfer};
 use wordcraft_doc::Document;
 
-/// The delimiter between parts. It holds `=_`, which neither encoding can produce: in
-/// quoted-printable an `=` is always followed by two hex digits or a line break, and base64 has
-/// no `_` (RFC 2045 §6.7 and RFC 2046 §5.1.1 suggest this), so no part's content can contain it.
-pub(super) const BOUNDARY: &str = "----=_WordCraft_Part_0";
 /// Where the page is (its `Content-Location`).
 pub(super) const PAGE_LOCATION: &str = "file:///document.htm";
 /// The folder beside the page that its pictures' locations put them in.
 pub(super) const FILES: &str = "document_files";
-/// Longest encoded line, line break not counted (RFC 2045 §6.7 rule 5, §6.8).
-const MAX_LINE: usize = 76;
+/// What every boundary of the message starts with.
+pub(super) const BOUNDARY_PREFIX: &str = "----=_WordCraft_Part_";
 /// Most characters of the title written in the `Subject` header.
-const MAX_SUBJECT_CHARS: usize = 256;
-/// Most UTF-8 bytes in one encoded word: 42 bytes are 56 base64 characters, so a word
-/// (`=?utf-8?B?…?=`, 68 characters) and the `Subject: ` before the first stay within the 78
-/// characters a header line should keep to (RFC 2047 §2, RFC 5322 §2.1.1).
-const WORD_BYTES: usize = 42;
+pub(super) const MAX_SUBJECT_CHARS: usize = 256;
 /// How [`crate::html::export`] writes a picture: `<img src="data:<type>;base64,<data>"`.
 const IMG_DATA: &str = "<img src=\"data:";
 
@@ -43,8 +37,8 @@ const IMG_DATA: &str = "<img src=\"data:";
 struct Picture<'a> {
     /// Its media type, as the page's `data:` URI gave it.
     mime: &'a str,
-    /// Its bytes in base64, as the page held them.
-    base64: &'a str,
+    /// Its bytes.
+    data: Vec<u8>,
     /// Its file name in [`FILES`], which is also its `Content-ID`.
     name: String,
 }
@@ -60,33 +54,23 @@ pub fn export(doc: &Document) -> Vec<u8> {
 /// `data:` URI becomes a part the page names by its `Content-ID`; anything else stays as it is.
 pub fn export_html(html: &str, title: &str) -> Vec<u8> {
     let (page, pictures) = take_pictures(html);
-    let pictures_len: usize = pictures.iter().map(|p| p.base64.len() + p.base64.len() / MAX_LINE * 2 + 192).sum();
-    let mut out = String::with_capacity(page.len() + page.len() / 4 + pictures_len + 512);
-    out.push_str("MIME-Version: 1.0\r\n");
-    if let Some(subject) = subject(title) {
-        out.push_str(&subject);
-    }
-    out.push_str(&format!("Content-Type: multipart/related; type=\"text/html\";\r\n\tboundary=\"{BOUNDARY}\"\r\n\r\n"));
-    // No preamble: the first delimiter starts the body.
-    out.push_str(&format!("--{BOUNDARY}\r\n"));
-    part_headers(&mut out, "text/html; charset=\"utf-8\"", "quoted-printable", None, PAGE_LOCATION);
-    quoted_printable(page.as_bytes(), &mut out);
-    for p in &pictures {
-        out.push_str(&format!("\r\n--{BOUNDARY}\r\n"));
-        part_headers(&mut out, p.mime, "base64", Some(&p.name), &format!("file:///{FILES}/{}", p.name));
-        wrap(p.base64, &mut out);
-    }
-    out.push_str(&format!("\r\n--{BOUNDARY}--\r\n"));
-    out.into_bytes()
-}
-
-/// A part's headers, its `Content-ID` (`<id>`) when it has one, and the empty line that ends them.
-fn part_headers(out: &mut String, content_type: &str, encoding: &str, id: Option<&str>, location: &str) {
-    out.push_str(&format!("Content-Type: {content_type}\r\nContent-Transfer-Encoding: {encoding}\r\n"));
-    if let Some(id) = id {
-        out.push_str(&format!("Content-ID: <{id}>\r\n"));
-    }
-    out.push_str(&format!("Content-Location: {location}\r\n\r\n"));
+    let mut root = Entity::text("html", &page);
+    root.fields.push(("Content-Location".into(), PAGE_LOCATION.into()));
+    let mut parts = Vec::with_capacity(pictures.len().saturating_add(1));
+    parts.push(root);
+    parts.extend(pictures.iter().map(|p| Entity {
+        fields: vec![
+            ("Content-Type".into(), craft_mime::safe_media_type(p.mime)),
+            ("Content-Transfer-Encoding".into(), "base64".into()),
+            ("Content-ID".into(), format!("<{}>", craft_mime::clean_id(&p.name))),
+            ("Content-Location".into(), format!("file:///{FILES}/{}", p.name)),
+        ],
+        content: transfer::base64_lines(&p.data),
+    }));
+    let message = Entity::multipart("related", &[("type", "text/html")], &parts, &mut Boundaries::new(BOUNDARY_PREFIX));
+    let subject = subject(title);
+    let headers: Vec<(&str, &str)> = subject.iter().map(|s| ("Subject", s.as_str())).collect();
+    craft_mime::write_message(&headers, &message)
 }
 
 /// The page with each base64 `data:` picture replaced by `cid:` and its name, and the
@@ -97,6 +81,7 @@ fn part_headers(out: &mut String, content_type: &str, encoding: &str, id: Option
 fn take_pictures(html: &str) -> (String, Vec<Picture<'_>>) {
     let mut page = String::with_capacity(html.len());
     let mut pictures: Vec<Picture<'_>> = Vec::new();
+    // Keyed by the picture's base64 text, so a picture shown again is decoded once.
     let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut rest = html;
     while let Some(at) = rest.find(IMG_DATA) {
@@ -104,13 +89,20 @@ fn take_pictures(html: &str) -> (String, Vec<Picture<'_>>) {
         // From `data:` to the closing quote.
         let uri_and_after = rest.get(at + IMG_DATA.len() - "data:".len()..).unwrap_or("");
         let uri = uri_and_after.find('"').and_then(|end| uri_and_after.get(..end).map(|uri| (uri, end)));
-        match uri.and_then(|(uri, end)| data_uri(uri).map(|d| (d, end))) {
-            Some(((mime, base64), end)) => {
-                let i = *seen.entry(base64).or_insert_with(|| {
-                    let name = format!("image{:03}.{}", pictures.len() + 1, extension(mime));
-                    pictures.push(Picture { mime, base64, name });
-                    pictures.len() - 1
-                });
+        let known = uri.and_then(|(uri, end)| {
+            let (mime, base64) = data_uri(uri)?;
+            if let Some(&i) = seen.get(base64) {
+                return Some((i, end));
+            }
+            let data = craft_mime::base64::STANDARD.decode(base64).ok()?;
+            let name = format!("image{:03}.{}", pictures.len() + 1, extension(mime));
+            pictures.push(Picture { mime, data, name });
+            let i = pictures.len() - 1;
+            seen.insert(base64, i);
+            Some((i, end))
+        });
+        match known {
+            Some((i, end)) => {
                 page.push_str("<img src=\"cid:");
                 page.push_str(pictures.get(i).map(|p| p.name.as_str()).unwrap_or(""));
                 // The closing quote and the rest of the tag follow.
@@ -150,77 +142,13 @@ fn extension(mime: &str) -> &'static str {
     }
 }
 
-/// Encode `data` quoted-printable (RFC 2045 §6.7) onto `out`: each line break (LF or CRLF) is
-/// a CRLF, printable ASCII other than `=` stands as it is, a space or tab too unless it ends a
-/// line, and every other byte is `=XX`; lines longer than [`MAX_LINE`] are cut with `=` soft
-/// line breaks, never inside an `=XX`.
-pub(super) fn quoted_printable(data: &[u8], out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for (n, line) in data.split(|&b| b == b'\n').enumerate() {
-        if n > 0 {
-            out.push_str("\r\n");
-        }
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        let mut column = 0;
-        for (i, &b) in line.iter().enumerate() {
-            let ends_line = i + 1 == line.len();
-            let literal = matches!(b, 33..=60 | 62..=126) || (matches!(b, b' ' | b'\t') && !ends_line);
-            let width = if literal { 1 } else { 3 };
-            // Room for the `=` of a soft line break.
-            if column + width > MAX_LINE - 1 {
-                out.push_str("=\r\n");
-                column = 0;
-            }
-            if literal {
-                out.push(char::from(b));
-            } else {
-                out.push('=');
-                out.push(char::from(HEX.get(usize::from(b >> 4)).copied().unwrap_or(b'0')));
-                out.push(char::from(HEX.get(usize::from(b & 15)).copied().unwrap_or(b'0')));
-            }
-            column += width;
-        }
-    }
-}
-
-/// `base64` in lines of [`MAX_LINE`] characters, CRLF between them.
-fn wrap(base64: &str, out: &mut String) {
-    for (n, line) in base64.as_bytes().chunks(MAX_LINE).enumerate() {
-        if n > 0 {
-            out.push_str("\r\n");
-        }
-        // `take_pictures` only keeps ASCII base64.
-        out.push_str(std::str::from_utf8(line).unwrap_or(""));
-    }
-}
-
-/// The `Subject` header line(s) for `title`: its first [`MAX_SUBJECT_CHARS`] characters, control
-/// characters (line breaks among them) as spaces, in RFC 2047 `B` encoded words of whole
-/// characters, one per line; `None` for an empty title.
+/// The `Subject` value for `title`: its first [`MAX_SUBJECT_CHARS`] characters, control
+/// characters (line breaks among them) as spaces, trimmed, as craft-mime encodes free text (as
+/// it is when plain, else RFC 2047 encoded-words); `None` for an empty title.
 pub(super) fn subject(title: &str) -> Option<String> {
     let clean: String = title.chars().take(MAX_SUBJECT_CHARS).map(|c| if c.is_control() { ' ' } else { c }).collect();
     let clean = clean.trim();
-    if clean.is_empty() {
-        return None;
-    }
-    let mut words: Vec<String> = Vec::new();
-    let mut chunk = String::new();
-    for c in clean.chars() {
-        if chunk.len() + c.len_utf8() > WORD_BYTES {
-            words.push(encoded_word(&chunk));
-            chunk.clear();
-        }
-        chunk.push(c);
-    }
-    if !chunk.is_empty() {
-        words.push(encoded_word(&chunk));
-    }
-    // Folding white space between encoded words is not part of the text (RFC 2047 §6.2).
-    Some(format!("Subject: {}\r\n", words.join("\r\n ")))
-}
-
-fn encoded_word(text: &str) -> String {
-    format!("=?utf-8?B?{}?=", crate::model::base64_encode(text.as_bytes()))
+    (!clean.is_empty()).then(|| craft_mime::encode_unstructured("Subject", clean))
 }
 
 #[cfg(test)]

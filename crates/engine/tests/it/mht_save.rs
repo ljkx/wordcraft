@@ -48,7 +48,9 @@ fn a_document_saved_as_a_single_file_web_page_opens_again() {
     let doc = report();
     for name in ["report.mht", "report.mhtml", "REPORT.MHT"] {
         let bytes = io::save_bytes(name, &doc).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(bytes.starts_with(b"MIME-Version: 1.0\r\n"), "{name}");
+        // The title is the subject, then the MIME message.
+        assert!(bytes.starts_with(b"Subject: =?UTF-8?B?"), "{name}");
+        assert!(bytes.windows(19).any(|w| w == b"\r\nMIME-Version: 1.0"), "{name}");
         assert!(wordcraft_formats::mht::is_mht(&bytes), "{name}");
         let back = io::open_bytes(name, &bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(lines(&back), lines(&doc), "{name}");
