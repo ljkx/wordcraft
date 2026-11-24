@@ -103,7 +103,7 @@ fn take_pictures(html: &str) -> (String, Vec<Picture<'_>>) {
         });
         match known {
             Some((i, end)) => {
-                page.push_str("<img src=\"cid:");
+                page.push_str(&format!("<img src=\"file:///{FILES}/"));
                 page.push_str(pictures.get(i).map(|p| p.name.as_str()).unwrap_or(""));
                 // The closing quote and the rest of the tag follow.
                 rest = uri_and_after.get(end..).unwrap_or("");
