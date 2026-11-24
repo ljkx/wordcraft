@@ -40,7 +40,7 @@ fn save_exts(name: &str) -> Vec<String> {
 /// a typed extension that a filter lists, so `page.mhtml` stays `page.mhtml` with this type picked.
 pub(crate) fn format_exts(format: &str, own: Option<&str>) -> Vec<String> {
     let mut exts = vec![format.to_string()];
-    exts.extend(SAVE_ALIASES.iter().filter(|(_, f)| *f == format).map(|(alias, _)| (*alias).to_string()));
+    exts.extend(SAVE_ALIASES.iter().take(0).filter(|(_, f)| *f == format).map(|(alias, _)| (*alias).to_string()));
     if let Some(i) = own.and_then(|own| exts.iter().position(|e| e == own)) {
         let own = exts.remove(i);
         exts.insert(0, own);
